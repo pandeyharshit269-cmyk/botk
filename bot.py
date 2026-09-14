@@ -16,6 +16,7 @@ import qrcode
 from gtts import gTTS
 import yt_dlp
 from telethon import TelegramClient, events, functions, types
+from telethon.tl.custom import Button
 from telethon.errors import FloodWaitError, RPCError, SessionPasswordNeededError, MessageNotModifiedError, UnauthorizedError, AuthKeyDuplicatedError
 from telethon.sessions import StringSession
 from cryptography.fernet import Fernet
@@ -1018,8 +1019,8 @@ async def is_user_in_channel(user_id, channel_data):
 def get_join_buttons():
     buttons = []
     for idx, ch in enumerate(REQUIRED_CHANNELS, 1):
-        buttons.append([types.KeyboardButtonUrl(text=f"🔗 Join {ch['name']}", url=ch["invite"])])
-    buttons.append([types.KeyboardButtonCallback(text="✅ I have joined all", data=b"verify_channels")])
+        buttons.append([Button.url(text=f"🔗 Join {ch['name']}", url=ch["invite"])])
+    buttons.append([Button.inline(text="✅ I have joined all", data=b"verify_channels")])
     return buttons
 
 async def shutdown_handler(sig, frame):
@@ -1131,10 +1132,10 @@ async def start_handler(event):
     broadcast_users.add(user_id)
     save_users(broadcast_users)
     buttons = [
-        [types.KeyboardButtonCallback("💎 Buy Premium", data="buy_menu")],
-        [types.KeyboardButtonCallback("💰 Deposit / Check Balance", data="deposit")],
-        [types.KeyboardButtonCallback("🎟️ Redeem Code", data="redeem_prompt")],
-        [types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)],
+        [Button.inline("💎 Buy Premium", data="buy_menu")],
+        [Button.inline("💰 Deposit / Check Balance", data="deposit")],
+        [Button.inline("🎟️ Redeem Code", data="redeem_prompt")],
+        [Button.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)],
     ]
     bal = await get_balance(user_id)
     intro = (
@@ -1454,7 +1455,7 @@ async def callback_handler(event):
             "4. Example caption: `I paid ₹100`\n"
             "5. Our team will verify and credit your wallet."
         ).format(UPI_ID=UPI_ID)
-        buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+        buttons = [[Button.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
         try:
             await event.delete()
         except:
@@ -1477,9 +1478,9 @@ async def callback_handler(event):
             await safe_edit(event, f"💎 You are already a premium user!\nPlan: {prem['plan'].upper()}\nExpires: {expiry}")
             return
         buttons = [
-            [types.KeyboardButtonCallback("📅 Monthly (₹45/30 days)", data="buy_monthly")],
-            [types.KeyboardButtonCallback("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
-            [types.KeyboardButtonCallback("📅 Yearly (₹490/365 days)", data="buy_yearly")],
+            [Button.inline("📅 Monthly (₹45/30 days)", data="buy_monthly")],
+            [Button.inline("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
+            [Button.inline("📅 Yearly (₹490/365 days)", data="buy_yearly")],
         ]
         await safe_edit(event, "💰 **Select your premium plan:**", buttons=buttons)
     elif data.startswith("buy_"):
@@ -1495,7 +1496,7 @@ async def callback_handler(event):
                 f"Need additional: ₹{price - bal:.2f}\n\n"
                 f"Please deposit more funds using the **Deposit** button."
             )
-            buttons = [[types.KeyboardButtonCallback("💰 Deposit Now", data="deposit")]]
+            buttons = [[Button.inline("💰 Deposit Now", data="deposit")]]
             await safe_edit(event, msg, buttons=buttons)
             return
         try:
@@ -1636,9 +1637,9 @@ async def buy_cmd(event):
         await safe_reply(event, f"💎 You are already a premium user!\nPlan: {prem['plan'].upper()}\nExpires: {expiry}")
         return
     buttons = [
-        [types.KeyboardButtonCallback("📅 Monthly (₹45/30 days)", data="buy_monthly")],
-        [types.KeyboardButtonCallback("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
-        [types.KeyboardButtonCallback("📅 Yearly (₹490/365 days)", data="buy_yearly")],
+        [Button.inline("📅 Monthly (₹45/30 days)", data="buy_monthly")],
+        [Button.inline("📅 Quarterly (₹120/90 days)", data="buy_quarterly")],
+        [Button.inline("📅 Yearly (₹490/365 days)", data="buy_yearly")],
     ]
     await safe_reply(event, "💰 **Select your premium plan:**", buttons=buttons)
 
@@ -1655,7 +1656,7 @@ async def deposit_cmd(event):
         "4. Example caption: `I paid ₹100`\n"
         "5. Our team will verify and credit your wallet."
     ).format(UPI_ID=UPI_ID)
-    buttons = [[types.KeyboardButtonUrl("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+    buttons = [[Button.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
     try:
         await event.reply(caption, file=QR_IMAGE_PATH, buttons=buttons)
     except Exception as e:
@@ -1743,8 +1744,8 @@ async def payment_handler(event):
                         owner,
                         caption,
                         buttons=[
-                            [types.KeyboardButtonCallback("✅ Approve", f"approve_deposit_{user_id}_{amount}")],
-                            [types.KeyboardButtonCallback("❌ Reject", f"reject_deposit_{user_id}")],
+                            [Button.inline("✅ Approve", f"approve_deposit_{user_id}_{amount}")],
+                            [Button.inline("❌ Reject", f"reject_deposit_{user_id}")],
                         ]
                     )
             except Exception as e:
@@ -1780,9 +1781,9 @@ async def payment_handler(event):
                     await MAIN_BOT_CLIENT.send_message(
                         owner,
                         caption,
-                        buttons=[
-                            [types.KeyboardButtonCallback("✅ Approve", f"approve_{user_id}_{plan}")],
-                            [types.KeyboardButtonCallback("❌ Reject", f"reject_{user_id}")],
+                       buttons=[
+                            [Button.inline("✅ Approve", f"approve_{user_id}_{plan}")],
+                            [Button.inline("❌ Reject", f"reject_{user_id}")],
                         ]
                     )
             except Exception as e:
@@ -16057,9 +16058,9 @@ async def run_user_bot(session_string, chat_id):
                     f"💖 **{name}**, let's be BFFs! 🥺\n\nYou make my heart skip a beat 💓",
                 ]
                 msg = random.choice(msgs)
-                buttons = [
-                    [types.KeyboardButtonCallback("💞 Yes / हाँ", f"bestfrnd_yes_{uid}")],
-                    [types.KeyboardButtonCallback("💔 No / नहीं", f"bestfrnd_no_{uid}")]
+               buttons = [
+                    [Button.inline("💞 Yes / हाँ", f"bestfrnd_yes_{uid}")],
+                    [Button.inline("💔 No / नहीं", f"bestfrnd_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
@@ -16080,8 +16081,8 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 msg = random.choice(msgs)
                 buttons = [
-                    [types.KeyboardButtonCallback("💍 Yes / हाँ", f"marriage_yes_{uid}")],
-                    [types.KeyboardButtonCallback("💔 No / नहीं", f"marriage_no_{uid}")]
+                    [Button.inline("💍 Yes / हाँ", f"marriage_yes_{uid}")],
+                    [Button.inline("💔 No / नहीं", f"marriage_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
@@ -16102,8 +16103,8 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 msg = random.choice(msgs)
                 buttons = [
-                    [types.KeyboardButtonCallback("✅ Yes / हाँ", f"divorce_yes_{uid}")],
-                    [types.KeyboardButtonCallback("❌ No / नहीं", f"divorce_no_{uid}")]
+                    [Button.inline("✅ Yes / हाँ", f"divorce_yes_{uid}")],
+                    [Button.inline("❌ No / नहीं", f"divorce_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:

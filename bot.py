@@ -16058,7 +16058,7 @@ async def run_user_bot(session_string, chat_id):
                     f"💖 **{name}**, let's be BFFs! 🥺\n\nYou make my heart skip a beat 💓",
                 ]
                 msg = random.choice(msgs)
-               buttons = [
+                buttons = [
                     [Button.inline("💞 Yes / हाँ", f"bestfrnd_yes_{uid}")],
                     [Button.inline("💔 No / नहीं", f"bestfrnd_no_{uid}")]
                 ]

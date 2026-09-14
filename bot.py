@@ -1781,7 +1781,7 @@ async def payment_handler(event):
                     await MAIN_BOT_CLIENT.send_message(
                         owner,
                         caption,
-                       buttons=[
+                        buttons=[
                             [Button.inline("✅ Approve", f"approve_{user_id}_{plan}")],
                             [Button.inline("❌ Reject", f"reject_{user_id}")],
                         ]

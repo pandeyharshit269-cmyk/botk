@@ -41,6 +41,182 @@ UPI_ID = os.environ.get("UPI_ID", "paryush01@nyes")
 QR_IMAGE_PATH = os.environ.get("QR_IMAGE_PATH", "upi_qr.jpg")
 PREMIUM_FEATURES_LINK = os.environ.get("PREMIUM_FEATURES_LINK", "https://t.me/userbotsupport_ZA/20")
 
+
+# ─── BOT API 9.4 PREMIUM BUTTON BRIDGE ─────────────────────────────
+# Telethon's MTProto button constructors expose the button style but not
+# Bot API's icon_custom_emoji_id field.  We therefore send only button-bearing
+# UI messages through the Bot API while keeping the rest of the userbot on Telethon.
+BOT_API_BASE = "https://api.telegram.org/bot" + BOT_TOKEN
+
+class PremiumButton:
+    __slots__ = ("text", "kind", "data", "url", "style", "emoji_id")
+    def __init__(self, text, kind="callback", data=None, url=None, style="primary", emoji_id=None):
+        self.text = text
+        self.kind = kind
+        self.data = data
+        self.url = url
+        self.style = style
+        self.emoji_id = str(emoji_id) if emoji_id else None
+
+class PremiumButtonFactory:
+    @staticmethod
+    def _style(text, requested=None):
+        if requested in {"primary", "success", "danger"}:
+            return requested
+        t = str(text).lower()
+        if any(x in t for x in ("reject", "delete", "remove", "no /", "❌", "danger", "off")):
+            return "danger"
+        if any(x in t for x in ("approve", "verify", "join", "yes /", "success", "on", "confirm", "✅")):
+            return "success"
+        return "primary"
+
+    @staticmethod
+    def _emoji(emoji_id=None):
+        if emoji_id:
+            return str(emoji_id)
+        if PREMIUM_EMOJI_IDS:
+            return str(random.choice(PREMIUM_EMOJI_IDS))
+        return None
+
+    @classmethod
+    def inline(cls, text, data=None, style=None, icon_custom_emoji_id=None, **kwargs):
+        return PremiumButton(text, "callback", data=data, style=cls._style(text, style),
+                             emoji_id=cls._emoji(icon_custom_emoji_id))
+
+    @classmethod
+    def url(cls, text, url=None, style=None, icon_custom_emoji_id=None, **kwargs):
+        return PremiumButton(text, "url", url=url, style=cls._style(text, style),
+                             emoji_id=cls._emoji(icon_custom_emoji_id))
+
+PButton = PremiumButtonFactory
+
+
+def _is_premium_markup(buttons):
+    if not buttons:
+        return False
+    try:
+        return any(isinstance(b, PremiumButton) for row in buttons for b in row)
+    except Exception:
+        return False
+
+
+def _premium_markup_json(buttons):
+    rows = []
+    for row in (buttons or []):
+        out = []
+        for b in row:
+            if isinstance(b, PremiumButton):
+                item = {"text": b.text, "style": b.style}
+                if b.emoji_id:
+                    item["icon_custom_emoji_id"] = b.emoji_id
+                if b.kind == "url":
+                    item["url"] = b.url
+                else:
+                    item["callback_data"] = str(b.data or "").encode("utf-8")[:64].decode("utf-8", "ignore")
+                out.append(item)
+            else:
+                # Keep legacy Telethon buttons working if a non-premium button appears.
+                text = getattr(b, "text", "Button")
+                data = getattr(b, "data", None)
+                url = getattr(b, "url", None)
+                item = {"text": text}
+                if url:
+                    item["url"] = url
+                else:
+                    item["callback_data"] = (data.decode("utf-8", "ignore") if isinstance(data, bytes) else str(data or ""))[:64]
+                out.append(item)
+        rows.append(out)
+    return {"inline_keyboard": rows}
+
+
+def _premium_html(text):
+    """Small safe Markdown-ish renderer + real custom emoji HTML entities."""
+    import html as _html
+    raw = str(text or "")
+    # Pick IDs deterministically per emoji occurrence, then escape the rest.
+    targets = ["💎", "✨", "⚡", "👑", "🛡️", "🚀", "💰", "🎟️", "🔗", "✅", "❌", "📅", "🔥", "💞", "💔", "💍", "❤️", "🛑", "⚠️", "📱", "📝"]
+    pieces=[]; i=0; idx=0
+    while i < len(raw):
+        hit=None
+        for t in targets:
+            if raw.startswith(t,i): hit=t; break
+        if hit:
+            eid = str(PREMIUM_EMOJI_IDS[idx % len(PREMIUM_EMOJI_IDS)]) if PREMIUM_EMOJI_IDS else None
+            if eid:
+                pieces.append(f'<tg-emoji emoji-id="{eid}">◈</tg-emoji>')
+            else:
+                pieces.append(_html.escape(hit))
+            idx += 1; i += len(hit)
+        else:
+            pieces.append(_html.escape(raw[i])); i += 1
+    out=''.join(pieces)
+    # Minimal formatting compatible with Bot API HTML.
+    out=re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', out, flags=re.S)
+    out=re.sub(r'`([^`\n]+)`', r'<code>\1</code>', out)
+    return out
+
+
+def _event_message_id(event):
+    return getattr(event, "message_id", None) or getattr(event, "id", None) or getattr(getattr(event, "message", None), "id", None)
+
+
+def _event_chat_id(event):
+    return getattr(event, "chat_id", None) or getattr(getattr(event, "message", None), "chat_id", None)
+
+
+async def _botapi_request(method, data=None, files=None):
+    if not BOT_TOKEN:
+        return None
+    def _do():
+        try:
+            r = requests.post(f"{BOT_API_BASE}/{method}", data=data or {}, files=files, timeout=30)
+            return r.json()
+        except Exception as e:
+            print(f"[PremiumUI] Bot API {method} error: {e}")
+            return None
+    return await asyncio.to_thread(_do)
+
+
+async def _botapi_send(chat_id, text, buttons=None, file=None, **kwargs):
+    data = {"chat_id": chat_id, "reply_markup": json.dumps(_premium_markup_json(buttons)) if buttons else None}
+    data["text"] = _premium_html(text)
+    data["parse_mode"] = "HTML"
+    files = None
+    if file:
+        path = file
+        if isinstance(file, str) and os.path.exists(file):
+            files = {"photo": open(file, "rb")}
+            data.pop("text", None)
+            data["caption"] = _premium_html(text)
+            method = "sendPhoto"
+        else:
+            method = "sendMessage"
+    else:
+        method = "sendMessage"
+    try:
+        result = await _botapi_request(method, data=data, files=files)
+        if result and result.get("ok"):
+            return result.get("result")
+    finally:
+        if files:
+            try: files["photo"].close()
+            except Exception: pass
+    return None
+
+
+async def _botapi_edit(event, text, buttons=None):
+    chat_id = _event_chat_id(event); msg_id = _event_message_id(event)
+    if not chat_id or not msg_id:
+        return None
+    data = {"chat_id": chat_id, "message_id": msg_id, "text": _premium_html(text), "parse_mode": "HTML"}
+    if buttons is not None:
+        data["reply_markup"] = json.dumps(_premium_markup_json(buttons))
+    result = await _botapi_request("editMessageText", data=data)
+    if result and result.get("ok"):
+        return result.get("result")
+    return None
+
+
 # ─── PREMIUM UI / CUSTOM EMOJI ─────────────────────────────────────
 # Put Telegram custom-emoji document IDs here, comma-separated.
 # Example: PREMIUM_EMOJI_IDS="5368324170671202286,5368324170671202287"
@@ -213,18 +389,18 @@ def premium_buttons():
     # Telegram does not expose arbitrary background colors for inline buttons.
     # These labels create a colorful/premium appearance using emoji + typography.
     return [
-        [Button.inline("💎 𝐁𝐔𝐘 𝐏𝐑𝐄𝐌𝐈𝐔𝐌", data="buy_menu")],
-        [Button.inline("💰 𝐖𝐀𝐋𝐋𝐄𝐓 • 𝐃𝐄𝐏𝐎𝐒𝐈𝐓", data="deposit")],
-        [Button.inline("🎟️ 𝐑𝐄𝐃𝐄𝐄𝐌 𝐂𝐎𝐃𝐄", data="redeem_prompt")],
-        [Button.url("✨ 𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒", url=PREMIUM_FEATURES_LINK)],
+        [PButton.inline("💎 𝐁𝐔𝐘 𝐏𝐑𝐄𝐌𝐈𝐔𝐌", data="buy_menu")],
+        [PButton.inline("💰 𝐖𝐀𝐋𝐋𝐄𝐓 • 𝐃𝐄𝐏𝐎𝐒𝐈𝐓", data="deposit")],
+        [PButton.inline("🎟️ 𝐑𝐄𝐃𝐄𝐄𝐌 𝐂𝐎𝐃𝐄", data="redeem_prompt")],
+        [PButton.url("✨ 𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐅𝐄𝐀𝐓𝐔𝐑𝐄𝐒", url=PREMIUM_FEATURES_LINK)],
     ]
 
 def premium_plan_buttons():
     return [
-        [Button.inline("💎 𝐌𝐎𝐍𝐓𝐇𝐋𝐘 • ₹45 / 30 DAYS", data="buy_monthly")],
-        [Button.inline("⚡ 𝐐𝐔𝐀𝐑𝐓𝐄𝐑𝐋𝐘 • ₹120 / 90 DAYS", data="buy_quarterly")],
-        [Button.inline("👑 𝐘𝐄𝐀𝐑𝐋𝐘 • ₹490 / 365 DAYS", data="buy_yearly")],
-        [Button.inline("↩️ 𝐁𝐀𝐂𝐊", data="back_home")],
+        [PButton.inline("💎 𝐌𝐎𝐍𝐓𝐇𝐋𝐘 • ₹45 / 30 DAYS", data="buy_monthly")],
+        [PButton.inline("⚡ 𝐐𝐔𝐀𝐑𝐓𝐄𝐑𝐋𝐘 • ₹120 / 90 DAYS", data="buy_quarterly")],
+        [PButton.inline("👑 𝐘𝐄𝐀𝐑𝐋𝐘 • ₹490 / 365 DAYS", data="buy_yearly")],
+        [PButton.inline("↩️ 𝐁𝐀𝐂𝐊", data="back_home")],
     ]
 
 
@@ -1206,8 +1382,8 @@ async def is_user_in_channel(user_id, channel_data):
 def get_join_buttons():
     buttons = []
     for idx, ch in enumerate(REQUIRED_CHANNELS, 1):
-        buttons.append([Button.url(text=f"🔗 𝐉𝐎𝐈𝐍 • {ch['name']}", url=ch["invite"])])
-    buttons.append([Button.inline(text="✅ 𝐕𝐄𝐑𝐈𝐅𝐘 𝐀𝐋𝐋", data=b"verify_channels")])
+        buttons.append([PButton.url(text=f"🔗 𝐉𝐎𝐈𝐍 • {ch['name']}", url=ch["invite"])])
+    buttons.append([PButton.inline(text="✅ 𝐕𝐄𝐑𝐈𝐅𝐘 𝐀𝐋𝐋", data=b"verify_channels")])
     return buttons
 
 async def shutdown_handler(sig, frame):
@@ -1238,56 +1414,64 @@ signal.signal(signal.SIGINT, lambda s, f: asyncio.create_task(shutdown_handler(s
 
 async def safe_reply(event, text, buttons=None, **kwargs):
     try:
+        if _is_premium_markup(buttons) and not kwargs.get("file"):
+            return await _botapi_send(_event_chat_id(event), text, buttons=buttons)
+        if _is_premium_markup(buttons) and kwargs.get("file"):
+            return await _botapi_send(_event_chat_id(event), text, buttons=buttons, file=kwargs.get("file"))
         if PREMIUM_EMOJI_IDS and "formatting_entities" not in kwargs and "parse_mode" not in kwargs:
             text, entities = _premium_entity_text(text)
             if entities:
                 kwargs["formatting_entities"] = entities
         return await event.reply(text, buttons=buttons, **kwargs)
     except FloodWaitError as e:
-        wait = e.seconds + 1
-        await asyncio.sleep(wait)
+        await asyncio.sleep(e.seconds + 1)
         return await event.reply(text, buttons=buttons, **kwargs)
-    except:
+    except Exception:
         return None
 
-async def safe_respond(event, text, **kwargs):
+async def safe_respond(event, text, buttons=None, **kwargs):
     try:
+        if _is_premium_markup(buttons):
+            return await _botapi_send(_event_chat_id(event), text, buttons=buttons, file=kwargs.get("file"))
         if PREMIUM_EMOJI_IDS and "formatting_entities" not in kwargs and "parse_mode" not in kwargs:
             text, entities = _premium_entity_text(text)
             if entities:
                 kwargs["formatting_entities"] = entities
-        return await event.respond(text, **kwargs)
+        return await event.respond(text, buttons=buttons, **kwargs)
     except FloodWaitError as e:
-        wait = e.seconds + 1
-        await asyncio.sleep(wait)
-        return await event.respond(text, **kwargs)
-    except:
+        await asyncio.sleep(e.seconds + 1)
+        return await event.respond(text, buttons=buttons, **kwargs)
+    except Exception:
         return None
 
 async def safe_edit(event, text, buttons=None, **kwargs):
     try:
+        if _is_premium_markup(buttons):
+            edited = await _botapi_edit(event, text, buttons=buttons)
+            if edited is not None:
+                return edited
         if PREMIUM_EMOJI_IDS and "formatting_entities" not in kwargs and "parse_mode" not in kwargs:
             text, entities = _premium_entity_text(text)
             if entities:
                 kwargs["formatting_entities"] = entities
         return await event.edit(text, buttons=buttons, **kwargs)
     except FloodWaitError as e:
-        wait = e.seconds + 1
-        await asyncio.sleep(wait)
+        await asyncio.sleep(e.seconds + 1)
         return await event.edit(text, buttons=buttons, **kwargs)
     except MessageNotModifiedError:
         pass
-    except:
+    except Exception:
         return None
 
-async def safe_send_main(chat, text, **kwargs):
+async def safe_send_main(chat, text, buttons=None, **kwargs):
     try:
+        if _is_premium_markup(buttons):
+            return await _botapi_send(chat, text, buttons=buttons, file=kwargs.get("file"))
         return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
     except FloodWaitError as e:
-        wait = e.seconds + 1
-        await asyncio.sleep(wait)
+        await asyncio.sleep(e.seconds + 1)
         return await MAIN_BOT_CLIENT.send_message(chat, text, **kwargs)
-    except:
+    except Exception:
         return None
 
 def plan_price(plan):
@@ -1651,15 +1835,15 @@ async def callback_handler(event):
             "4. Example caption: `I paid ₹100`\n"
             "5. Our team will verify and credit your wallet."
         ).format(UPI_ID=UPI_ID)
-        buttons = [[Button.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+        buttons = [[PButton.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
         try:
             await event.delete()
         except:
             pass
         try:
-            await event.respond(caption, file=QR_IMAGE_PATH, buttons=buttons)
+            await safe_respond(event, caption, buttons=buttons, file=QR_IMAGE_PATH)
         except Exception as e:
-            await event.respond(caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
+            await safe_respond(event, caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
             print(f"Deposit QR send error: {e}")
         user_states[user_id] = {"step": "waiting_deposit"}
         await event.answer("Deposit instructions sent.")
@@ -1688,7 +1872,7 @@ async def callback_handler(event):
                 f"Need additional: ₹{price - bal:.2f}\n\n"
                 f"Please deposit more funds using the **Deposit** button."
             )
-            buttons = [[Button.inline("💰 Deposit Now", data="deposit")]]
+            buttons = [[PButton.inline("💰 Deposit Now", data="deposit")]]
             await safe_edit(event, msg, buttons=buttons)
             return
         try:
@@ -1844,11 +2028,11 @@ async def deposit_cmd(event):
         "4. Example caption: `I paid ₹100`\n"
         "5. Our team will verify and credit your wallet."
     ).format(UPI_ID=UPI_ID)
-    buttons = [[Button.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
+    buttons = [[PButton.url("🔗 Premium Features", url=PREMIUM_FEATURES_LINK)]]
     try:
-        await event.reply(caption, file=QR_IMAGE_PATH, buttons=buttons)
+        await safe_reply(event, caption, buttons=buttons, file=QR_IMAGE_PATH)
     except Exception as e:
-        await event.reply(caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
+        await safe_reply(event, caption + "\n\n⚠️ QR image not found. Please contact owner.", buttons=buttons)
         print(f"Deposit QR send error: {e}")
     user_states[user_id] = {"step": "waiting_deposit"}
 
@@ -1928,12 +2112,12 @@ async def payment_handler(event):
             try:
                 fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
                 if fwd:
-                    await MAIN_BOT_CLIENT.send_message(
+                    await safe_send_main(
                         owner,
                         caption,
                         buttons=[
-                            [Button.inline("✅ Approve", f"approve_deposit_{user_id}_{amount}")],
-                            [Button.inline("❌ Reject", f"reject_deposit_{user_id}")],
+                            [PButton.inline("✅ Approve", f"approve_deposit_{user_id}_{amount}")],
+                            [PButton.inline("❌ Reject", f"reject_deposit_{user_id}")],
                         ]
                     )
             except Exception as e:
@@ -1966,12 +2150,12 @@ async def payment_handler(event):
             try:
                 fwd = await MAIN_BOT_CLIENT.forward_messages(owner, event.id, event.chat_id)
                 if fwd:
-                    await MAIN_BOT_CLIENT.send_message(
+                    await safe_send_main(
                         owner,
                         caption,
                         buttons=[
-                            [Button.inline("✅ Approve", f"approve_{user_id}_{plan}")],
-                            [Button.inline("❌ Reject", f"reject_{user_id}")],
+                            [PButton.inline("✅ Approve", f"approve_{user_id}_{plan}")],
+                            [PButton.inline("❌ Reject", f"reject_{user_id}")],
                         ]
                     )
             except Exception as e:
@@ -16247,8 +16431,8 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 msg = random.choice(msgs)
                 buttons = [
-                    [Button.inline("💞 Yes / हाँ", f"bestfrnd_yes_{uid}")],
-                    [Button.inline("💔 No / नहीं", f"bestfrnd_no_{uid}")]
+                    [PButton.inline("💞 Yes / हाँ", f"bestfrnd_yes_{uid}")],
+                    [PButton.inline("💔 No / नहीं", f"bestfrnd_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
@@ -16269,8 +16453,8 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 msg = random.choice(msgs)
                 buttons = [
-                    [Button.inline("💍 Yes / हाँ", f"marriage_yes_{uid}")],
-                    [Button.inline("💔 No / नहीं", f"marriage_no_{uid}")]
+                    [PButton.inline("💍 Yes / हाँ", f"marriage_yes_{uid}")],
+                    [PButton.inline("💔 No / नहीं", f"marriage_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
@@ -16291,8 +16475,8 @@ async def run_user_bot(session_string, chat_id):
                 ]
                 msg = random.choice(msgs)
                 buttons = [
-                    [Button.inline("✅ Yes / हाँ", f"divorce_yes_{uid}")],
-                    [Button.inline("❌ No / नहीं", f"divorce_no_{uid}")]
+                    [PButton.inline("✅ Yes / हाँ", f"divorce_yes_{uid}")],
+                    [PButton.inline("❌ No / नहीं", f"divorce_no_{uid}")]
                 ]
                 await safe_edit(event, msg, buttons=buttons)
             except:
